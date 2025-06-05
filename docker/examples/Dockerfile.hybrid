@@ -1,0 +1,68 @@
+# 混合策略 Dockerfile - 兼顾性能和可靠性
+FROM node:20-alpine AS base
+ARG PNPM_HOME=/pnpm
+ARG PATH=$PNPM_HOME:$PATH
+RUN corepack enable
+
+# ==================== 快速构建阶段（使用缓存挂载）====================
+FROM base AS fast-builder
+WORKDIR /app
+
+COPY package.json pnpm-lock.yaml* ./
+
+# 🚀 快速安装所有依赖（利用缓存）
+RUN --mount=type=cache,id=pnpm-dev,target=/pnpm/store \
+    pnpm install --frozen-lockfile
+
+COPY . .
+
+# 🔨 快速构建
+RUN pnpm run build
+
+# ==================== 可靠部署阶段（使用 pnpm deploy）====================
+FROM base AS reliable-deployer
+WORKDIR /app
+
+COPY package.json pnpm-lock.yaml* ./
+
+# 🛡️ 创建可靠的部署目录（无 hard link 依赖）
+RUN --mount=type=cache,id=pnpm-prod,target=/pnpm/store \
+    pnpm deploy --prod /app/deploy
+
+# 📦 复制构建产物
+COPY --from=fast-builder /app/dist /app/deploy/dist
+
+# ==================== 最终运行阶段 ====================
+FROM node:20-alpine AS runner
+
+# 安全设置
+RUN addgroup -g 1001 -S nodejs && \
+    adduser -S hono -u 1001
+
+WORKDIR /app
+
+# 🎯 复制可靠的部署目录
+COPY --from=reliable-deployer --chown=hono:nodejs /app/deploy ./
+
+USER hono
+
+ENV NODE_ENV=production
+ENV PORT=8787
+
+EXPOSE 8787
+
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+    CMD node -e "http.get('http://localhost:8787/', (res) => { process.exit(res.statusCode === 200 ? 0 : 1) })" || exit 1
+
+CMD ["node", "dist/index.js"]
+
+# ==================== 开发环境变体 ====================
+FROM fast-builder AS development
+
+ENV NODE_ENV=development
+ENV PORT=5173
+ENV DOCKER_ENV=true
+
+EXPOSE 5173
+
+CMD ["pnpm", "run", "dev:docker", "--host", "0.0.0.0"] 

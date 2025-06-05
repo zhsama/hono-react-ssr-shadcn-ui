@@ -1,0 +1,64 @@
+# pnpm deploy 方案 Dockerfile
+FROM node:20-alpine AS base
+ARG PNPM_HOME=/pnpm
+ARG PATH=$PNPM_HOME:$PATH
+RUN corepack enable
+
+# ==================== 依赖安装阶段 ====================
+FROM base AS dependencies
+WORKDIR /app
+
+# 复制包配置文件
+COPY package.json pnpm-lock.yaml* ./
+
+# 安装所有依赖（包括 devDependencies）
+RUN --mount=type=cache,id=pnpm,target=/pnpm/store \
+    pnpm install --frozen-lockfile
+
+# ==================== 构建阶段 ====================
+FROM dependencies AS builder
+WORKDIR /app
+
+# 复制源代码
+COPY . .
+
+# 构建应用
+RUN pnpm run build
+
+# ==================== 部署准备阶段 ====================
+FROM base AS deployer
+WORKDIR /app
+
+# 复制包配置文件（deploy 需要）
+COPY package.json pnpm-lock.yaml* ./
+
+# 🚀 关键步骤：使用 pnpm deploy 创建扁平化结构
+RUN --mount=type=cache,id=pnpm,target=/pnpm/store \
+    pnpm deploy --prod /app/deploy
+
+# 复制构建产物到 deploy 目录
+COPY --from=builder /app/dist /app/deploy/dist
+
+# ==================== 运行阶段 ====================
+FROM node:20-alpine AS runner
+
+# 安全设置
+RUN addgroup -g 1001 -S nodejs && \
+    adduser -S hono -u 1001
+
+WORKDIR /app
+
+# 🎯 只复制 deploy 目录（包含扁平化的 node_modules）
+COPY --from=deployer --chown=hono:nodejs /app/deploy ./
+
+USER hono
+
+ENV NODE_ENV=production
+ENV PORT=8787
+
+EXPOSE 8787
+
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+    CMD node -e "http.get('http://localhost:8787/', (res) => { process.exit(res.statusCode === 200 ? 0 : 1) })" || exit 1
+
+CMD ["node", "dist/index.js"] 

@@ -1,0 +1,48 @@
+version: "3.8"
+
+services:
+  # 开发环境
+  dev:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+      target: development
+    ports:
+      - "5173:5173"
+    volumes:
+      - ..:/app
+      - /app/node_modules
+    environment:
+      - NODE_ENV=development
+      - DOCKER_ENV=true
+    command: pnpm run dev:docker
+    networks:
+      - hono-network
+
+  # 生产环境
+  prod:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+      target: runner
+    ports:
+      - "8787:8787"
+    environment:
+      - NODE_ENV=production
+    restart: unless-stopped
+    networks:
+      - hono-network
+
+  # 构建环境（用于测试构建过程）
+  builder:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+      target: builder
+    volumes:
+      - ../dist:/app/dist
+    command: pnpm run build
+
+networks:
+  hono-network:
+    driver: bridge

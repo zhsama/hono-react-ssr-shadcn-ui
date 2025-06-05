@@ -1,0 +1,73 @@
+version: "3.8"
+
+services:
+  # API 服务
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.monorepo-example
+      args:
+        SERVICE_NAME: api
+      target: runner
+    ports:
+      - "3001:8000"
+    environment:
+      - NODE_ENV=production
+      - PORT=8000
+    networks:
+      - monorepo-network
+
+  # Web 服务
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile.monorepo-example
+      args:
+        SERVICE_NAME: web
+      target: runner
+    ports:
+      - "3000:8000"
+    environment:
+      - NODE_ENV=production
+      - PORT=8000
+    networks:
+      - monorepo-network
+
+  # Admin 服务
+  admin:
+    build:
+      context: .
+      dockerfile: Dockerfile.monorepo-example
+      args:
+        SERVICE_NAME: admin
+      target: runner
+    ports:
+      - "3002:8000"
+    environment:
+      - NODE_ENV=production
+      - PORT=8000
+    networks:
+      - monorepo-network
+
+  # 开发环境 - API
+  api-dev:
+    build:
+      context: .
+      dockerfile: Dockerfile.monorepo-example
+      args:
+        SERVICE_NAME: api
+      target: deps # 只到依赖阶段，方便开发
+    ports:
+      - "5001:5173"
+    volumes:
+      - .:/app
+      - /app/node_modules
+    environment:
+      - NODE_ENV=development
+    command: ["pnpm", "run", "dev", "--filter=api"]
+    networks:
+      - monorepo-network
+
+networks:
+  monorepo-network:
+    driver: bridge

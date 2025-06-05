@@ -1,0 +1,82 @@
+# Monorepo 优化 Dockerfile 示例
+# 用于构建单个服务，同时最小化体积
+
+FROM node:20-alpine AS base
+ARG PNPM_HOME=/pnpm
+ARG PATH=$PNPM_HOME:$PATH
+
+# ==================== 依赖阶段 ====================
+FROM base AS deps
+RUN corepack enable
+WORKDIR /app
+
+# 1. 只复制包管理器配置文件
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+
+# 2. 使用 ARG 指定目标服务
+ARG SERVICE_NAME=api
+ENV SERVICE_NAME=${SERVICE_NAME}
+
+# 3. 复制工作区配置和必要的 package.json
+# 这里需要根据实际的依赖关系调整
+COPY apps/${SERVICE_NAME}/package.json ./apps/${SERVICE_NAME}/
+COPY packages/*/package.json ./packages/
+
+# 4. 只安装目标服务的依赖
+RUN --mount=type=cache,id=pnpm,target=/pnpm/store \
+    pnpm install --filter=${SERVICE_NAME} --frozen-lockfile
+
+# ==================== 构建阶段 ====================
+FROM deps AS builder
+
+# 5. 只复制需要的源码
+# 复制共享包
+COPY packages/ ./packages/
+
+# 复制目标服务源码
+COPY apps/${SERVICE_NAME} ./apps/${SERVICE_NAME}
+
+# 6. 只构建目标服务
+RUN pnpm run build --filter=${SERVICE_NAME}
+
+# ==================== 部署准备阶段 ====================
+FROM base AS deployer
+RUN corepack enable
+WORKDIR /app
+
+# 7. 使用 pnpm deploy 创建精简的部署目录
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY apps/${SERVICE_NAME}/package.json ./apps/${SERVICE_NAME}/
+COPY packages/*/package.json ./packages/
+
+# 8. 创建只包含生产依赖的干净部署
+RUN --mount=type=cache,id=pnpm,target=/pnpm/store \
+    pnpm deploy --filter=${SERVICE_NAME} --prod ./deploy
+
+# 9. 复制构建结果
+COPY --from=builder /app/apps/${SERVICE_NAME}/dist ./deploy/
+
+# ==================== 运行阶段 ====================
+FROM node:20-alpine AS runner
+
+# 10. 安全设置
+RUN apk add --no-cache tini && \
+    addgroup -g 1001 -S nodejs && \
+    adduser -S service -u 1001
+
+WORKDIR /app
+
+# 11. 只复制部署目录（体积最小）
+COPY --from=deployer --chown=service:nodejs /app/deploy ./
+
+USER service
+
+ENV NODE_ENV=production
+
+EXPOSE 8000
+
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+    CMD node -e "http.get('http://localhost:8000/health', (res) => { process.exit(res.statusCode === 200 ? 0 : 1) })" || exit 1
+
+ENTRYPOINT ["/sbin/tini", "--"]
+CMD ["node", "index.js"] 

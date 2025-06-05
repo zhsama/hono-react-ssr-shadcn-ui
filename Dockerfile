@@ -19,6 +19,39 @@ COPY . .
 
 RUN pnpm run build
 
+# ==================== 开发阶段 ====================
+FROM base AS development
+
+RUN apk add --no-cache \
+    tini \
+    && rm -rf /var/cache/apk/*
+
+ARG PNPM_HOME
+ARG PATH
+RUN corepack enable
+
+WORKDIR /app
+
+COPY package.json pnpm-lock.yaml* ./
+
+# 安装所有依赖（包括开发依赖）
+RUN --mount=type=cache,id=pnpm,target=/pnpm/store pnpm install --frozen-lockfile
+
+COPY . .
+
+ENV NODE_ENV=development
+ENV PORT=5173
+ENV DOCKER_ENV=true
+
+EXPOSE 5173
+
+HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
+    CMD node -e "http.get('http://localhost:5173/', (res) => { process.exit(res.statusCode === 200 ? 0 : 1) })" || exit 1
+
+ENTRYPOINT ["/sbin/tini", "--"]
+
+CMD ["pnpm", "run", "dev:docker", "--host", "0.0.0.0"]
+
 # ==================== 运行阶段 ====================
 FROM base AS runner
 
